@@ -1,0 +1,6 @@
+streamlit
+Pillow
+pandas
+gspread
+oauth2client
+requests
