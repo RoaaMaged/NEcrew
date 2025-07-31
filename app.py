@@ -1,3 +1,32 @@
+import streamlit as st
+import requests
+from PIL import Image
+import pandas as pd
+import io
+import base64
+
+st.title("📸 OCR Passport Field Extractor")
+
+# ⬇️ OCR.Space API call
+def extract_text_from_image(image_file):
+    api_key = st.secrets["OCR_SPACE_API_KEY"]
+    buffered = io.BytesIO()
+    image_file.save(buffered, format="JPEG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    response = requests.post(
+        "https://api.ocr.space/parse/image",
+        data={
+            "base64Image": "data:image/jpeg;base64," + img_str,
+            "language": "eng",
+            "apikey": api_key
+        },
+    )
+    result = response.json()
+    if result.get("IsErroredOnProcessing"):
+        return ""
+    return result["ParsedResults"][0]["ParsedText"]
+
+# ⬇️ Field extraction
 def extract_fields(text):
     fields = {
         "Document Type": "",
@@ -12,7 +41,7 @@ def extract_fields(text):
         "Country of Birth": ""
     }
 
-    # MRZ-style 3-letter country codes
+    # Passport 3-letter codes
     mrz_country_codes = {
         "egypt": "EGY",
         "saudi arabia": "SAU",
@@ -26,7 +55,6 @@ def extract_fields(text):
         "uae": "ARE",
         "jordan": "JOR",
         "lebanon": "LBN"
-        # Add more as needed
     }
 
     for line in text.split("\n"):
@@ -34,7 +62,7 @@ def extract_fields(text):
 
         if "type" in line and ":" in line:
             value = line.split(":")[-1].strip()
-            fields["Document Type"] = "P" if "passport" in value.lower() else value
+            fields["Document Type"] = "P" if "passport" in value else value
         elif "no" in line and ":" in line:
             fields["Document Number"] = line.split(":")[-1].strip()
         elif "nationality" in line and ":" in line:
@@ -56,3 +84,19 @@ def extract_fields(text):
             fields["Document Expiry Date"] = line.split(":")[-1].strip()
 
     return fields
+
+# ⬇️ UI
+uploaded_images = st.file_uploader("Upload image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+
+if uploaded_images:
+    all_data = []
+
+    for img in uploaded_images:
+        image = Image.open(img)
+        text = extract_text_from_image(image)
+        fields = extract_fields(text)
+        all_data.append(fields)
+
+    df = pd.DataFrame(all_data)
+    st.subheader("📋 Extracted Data")
+    st.dataframe(df, use_container_width=True)
