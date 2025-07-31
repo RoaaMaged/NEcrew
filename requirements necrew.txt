@@ -1,0 +1,7 @@
+streamlit>=1.33
+pytesseract
+pillow
+pandas
+gspread
+oauth2client
+streamlit-authenticator
