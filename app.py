@@ -4,10 +4,11 @@ from PIL import Image
 import pandas as pd
 import io
 import base64
+import re
 
-st.title("📸 OCR Passport Field Extractor")
+st.title("📸 OCR Passport/APIS Extractor")
 
-# OCR from OCR.Space
+# --- OCR API Call ---
 def extract_text_from_image(image_file):
     api_key = st.secrets["OCR_SPACE_API_KEY"]
     buffered = io.BytesIO()
@@ -26,7 +27,7 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# Field extraction from text
+# --- Extract Fields from OCR Text ---
 def extract_fields(text):
     fields = {
         "Document Type": "",
@@ -45,41 +46,81 @@ def extract_fields(text):
         "egypt": "EGY", "saudi arabia": "SAU", "united states": "USA",
         "united kingdom": "GBR", "india": "IND", "germany": "DEU",
         "france": "FRA", "qatar": "QAT", "kuwait": "KWT", "uae": "ARE",
-        "jordan": "JOR", "lebanon": "LBN"
+        "jordan": "JOR", "lebanon": "LBN", "sa": "SAU"
     }
 
-    for line in text.split("\n"):
-        line = line.strip().lower()
+    lines = [line.strip() for line in text.lower().split("\n") if line.strip()]
 
-        if "type" in line and ":" in line:
-            value = line.split(":")[-1].strip()
-            fields["Document Type"] = "P" if "passport" in value else value
-        elif "no" in line and ":" in line:
-            fields["Document Number"] = line.split(":")[-1].strip()
-        elif "nationality" in line and ":" in line:
-            nat = line.split(":")[-1].strip().lower()
-            fields["Nationality"] = mrz_country_codes.get(nat, nat[:3].upper())
-        elif "surname" in line or "family" in line:
-            fields["Family Name"] = " ".join(line.split()[1:])
-        elif "given" in line:
-            fields["Given Names"] = " ".join(line.split()[2:])
-        elif "dob" in line or "date of birth" in line:
-            fields["Date of Birth"] = line.split(":")[-1].strip()
-        elif "sex" in line:
-            fields["Sex"] = line.split(":")[-1].strip().capitalize()
-        elif "country of birth" in line:
-            fields["Country of Birth"] = line.split(":")[-1].strip().title()
-        elif "issuing state" in line:
-            fields["Issuing State"] = line.split(":")[-1].strip().title()
-        elif "expiry" in line or "expire date" in line:
-            fields["Document Expiry Date"] = line.split(":")[-1].strip()
+    for idx, line in enumerate(lines):
+        # Document Type
+        if "passport" in line:
+            fields["Document Type"] = "P"
 
-    # If all values are empty, fallback to showing raw OCR
+        # Nationality
+        if "nationality" in line or "country" in line or "origin" in line:
+            for country in mrz_country_codes:
+                if country in line:
+                    fields["Nationality"] = mrz_country_codes[country]
+                    break
+
+        # Document Number
+        if "document no" in line or "document number" in line or "id number" in line:
+            match = re.search(r'\b[a-z]?\d{6,}', line)
+            if match:
+                fields["Document Number"] = match.group().upper()
+
+        # Family Name / Surname
+        if "surname" in line or "family" in line:
+            parts = lines[idx + 1].split() if idx + 1 < len(lines) else []
+            fields["Family Name"] = parts[0].upper() if parts else ""
+
+        # Given Names (based on APIS NAME or Name line)
+        if "name" in line and "apis" in line:
+            parts = lines[idx + 1].split() if idx + 1 < len(lines) else []
+            fields["Given Names"] = " ".join(parts).upper()
+
+        # Sex
+        if "gender" in line or "sex" in line:
+            if "male" in line:
+                fields["Sex"] = "Male"
+            elif "female" in line:
+                fields["Sex"] = "Female"
+            else:
+                next_line = lines[idx + 1] if idx + 1 < len(lines) else ""
+                if "male" in next_line:
+                    fields["Sex"] = "Male"
+                elif "female" in next_line:
+                    fields["Sex"] = "Female"
+
+        # Date of Birth
+        if "date of birth" in line or "dob" in line:
+            match = re.search(r'\d{2}/\d{2}/\d{4}', line)
+            if match:
+                fields["Date of Birth"] = match.group()
+
+        # Document Expiry Date
+        if "expire" in line or "expiry" in line:
+            match = re.search(r'\d{2}/\d{2}/\d{4}', line)
+            if match:
+                fields["Document Expiry Date"] = match.group()
+
+        # Issuing State
+        if "document place" in line or "at origin" in line:
+            for country in mrz_country_codes:
+                if country in line:
+                    fields["Issuing State"] = mrz_country_codes[country]
+                    break
+
+        # Country of Birth fallback
+        if not fields["Country of Birth"]:
+            fields["Country of Birth"] = fields["Nationality"]
+
+    # If nothing matched, fallback
     if all(v == "" for v in fields.values()):
         return {"OCR Text": text.strip()}
     return fields
 
-# Upload and display
+# --- Upload and Extract ---
 uploaded_images = st.file_uploader("Upload image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_images:
