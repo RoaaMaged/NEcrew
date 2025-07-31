@@ -7,7 +7,7 @@ import base64
 
 st.title("📸 OCR Passport Field Extractor")
 
-# ⬇️ OCR.Space API call
+# ⬇️ OCR.Space API
 def extract_text_from_image(image_file):
     api_key = st.secrets["OCR_SPACE_API_KEY"]
     buffered = io.BytesIO()
@@ -26,7 +26,7 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# ⬇️ Field extraction
+# ⬇️ Field Extractor
 def extract_fields(text):
     fields = {
         "Document Type": "",
@@ -41,20 +41,11 @@ def extract_fields(text):
         "Country of Birth": ""
     }
 
-    # Passport 3-letter codes
     mrz_country_codes = {
-        "egypt": "EGY",
-        "saudi arabia": "SAU",
-        "united states": "USA",
-        "united kingdom": "GBR",
-        "india": "IND",
-        "germany": "DEU",
-        "france": "FRA",
-        "qatar": "QAT",
-        "kuwait": "KWT",
-        "uae": "ARE",
-        "jordan": "JOR",
-        "lebanon": "LBN"
+        "egypt": "EGY", "saudi arabia": "SAU", "united states": "USA",
+        "united kingdom": "GBR", "india": "IND", "germany": "DEU",
+        "france": "FRA", "qatar": "QAT", "kuwait": "KWT", "uae": "ARE",
+        "jordan": "JOR", "lebanon": "LBN"
     }
 
     for line in text.split("\n"):
@@ -85,18 +76,17 @@ def extract_fields(text):
 
     return fields
 
-# ⬇️ UI
+# ⬇️ File Upload UI
 uploaded_images = st.file_uploader("Upload image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_images:
-    all_data = []
+    results = []
 
     for img in uploaded_images:
+        st.markdown(f"#### 📷 Processing `{img.name}`")
         image = Image.open(img)
         text = extract_text_from_image(image)
         fields = extract_fields(text)
-        all_data.append(fields)
-
-    df = pd.DataFrame(all_data)
-    st.subheader("📋 Extracted Data")
-    st.dataframe(df, use_container_width=True)
+        results.append(fields)
+        df = pd.DataFrame(results)
+        st.dataframe(df, use_container_width=True)
