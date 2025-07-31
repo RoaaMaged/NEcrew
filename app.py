@@ -7,7 +7,7 @@ import base64
 
 st.title("📸 OCR Passport Field Extractor")
 
-# ⬇️ OCR.Space API
+# OCR from OCR.Space
 def extract_text_from_image(image_file):
     api_key = st.secrets["OCR_SPACE_API_KEY"]
     buffered = io.BytesIO()
@@ -26,7 +26,7 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# ⬇️ Field Extractor
+# Field extraction from text
 def extract_fields(text):
     fields = {
         "Document Type": "",
@@ -74,9 +74,12 @@ def extract_fields(text):
         elif "expiry" in line or "expire date" in line:
             fields["Document Expiry Date"] = line.split(":")[-1].strip()
 
+    # If all values are empty, fallback to showing raw OCR
+    if all(v == "" for v in fields.values()):
+        return {"OCR Text": text.strip()}
     return fields
 
-# ⬇️ File Upload UI
+# Upload and display
 uploaded_images = st.file_uploader("Upload image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_images:
@@ -86,6 +89,7 @@ if uploaded_images:
         st.markdown(f"#### 📷 Processing `{img.name}`")
         image = Image.open(img)
         text = extract_text_from_image(image)
+        st.text_area("📝 Raw OCR Output", text, height=150)
         fields = extract_fields(text)
         results.append(fields)
         df = pd.DataFrame(results)
