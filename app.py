@@ -95,7 +95,7 @@ uploaded_files = st.file_uploader("Upload Passport Image(s)", type=["jpg", "jpeg
 if uploaded_files:
     for img in uploaded_files:
         image = Image.open(img)
-        st.image(image, caption=img.name, use_column_width=True)
+        st.image(image, caption=img.name, use_container_width=True)  # ✅ fixed here
         with st.spinner("Extracting data..."):
             text = extract_text_from_image(image)
             fields = extract_passport_fields(text)
@@ -104,4 +104,3 @@ if uploaded_files:
         with st.expander(f"🧾 Extracted Passport Data - {img.name}", expanded=True):
             for key, value in fields.items():
                 st.markdown(f"**{key}**: {value if value else '—'}")
-
