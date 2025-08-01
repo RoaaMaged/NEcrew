@@ -27,7 +27,7 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# --- Field Extraction for Your OCR Layout ---
+# --- Clean and extract fields ---
 def extract_fields(text):
     fields = {
         "Document Type": "P",
@@ -49,7 +49,10 @@ def extract_fields(text):
         "jordan": "JOR", "lebanon": "LBN", "sa": "SAU"
     }
 
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    # Clean lines
+    raw_lines = [line.strip() for line in text.split("\n") if line.strip()]
+    skip_keywords = ["at destination", "app response", "app explanation", "code", "etc", "explanation", "document place"]
+    lines = [line for line in raw_lines if line.lower() not in skip_keywords]
     lines_lower = [line.lower() for line in lines]
 
     for i, line in enumerate(lines_lower):
@@ -59,10 +62,11 @@ def extract_fields(text):
             fields["Given Names"] = lines[i - 1].strip().upper()
 
         # Nationality
-        if line == "app explanation" and i + 1 < len(lines):
+        if line == "nationality" and i + 1 < len(lines):
             nat = lines[i + 1].strip().lower()
             fields["Nationality"] = mrz_country_codes.get(nat, nat[:3].upper())
-            fields["Country of Birth"] = fields["Nationality"]
+            if fields["Nationality"] in mrz_country_codes.values():
+                fields["Country of Birth"] = fields["Nationality"]
 
         # Issuing State
         if line == "passport" and i + 1 < len(lines):
@@ -73,9 +77,9 @@ def extract_fields(text):
         if "document no" in line or "id number" in line:
             for j in range(i + 1, i + 4):
                 if j < len(lines):
-                    doc_no = lines[j].strip()
-                    if len(doc_no) >= 6:
-                        fields["Document Number"] = doc_no.upper()
+                    doc_no = lines[j].strip().upper()
+                    if re.match(r"^[A-Z]?\d{7,}$", doc_no):
+                        fields["Document Number"] = doc_no
                         break
 
         # Sex
@@ -98,7 +102,7 @@ def extract_fields(text):
                         fields["Date of Birth"] = dob.group()
                         break
 
-        # Document Expiry Date
+        # Expiry Date
         if "expire" in line or "expiry" in line:
             for j in range(i, i + 4):
                 if j < len(lines):
