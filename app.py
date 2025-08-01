@@ -29,13 +29,15 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# Normalize to DD-MMM-YY
-def format_date(date_string):
+# Normalize and format dates
+def format_date_to_dmy(raw):
     try:
-        date_obj = datetime.strptime(date_string.strip(), "%d %b %Y")
-        return date_obj.strftime("%d-%b-%y")
+        raw = re.sub(r"[^A-Z0-9]", " ", raw.upper()).strip()
+        raw = re.sub(r"\s+", " ", raw)
+        dt = datetime.strptime(raw, "%d %b %Y")
     except:
         return ""
+    return dt.strftime("%d-%b-%y")  # e.g., 18-Apr-73
 
 # Extract passport fields
 def extract_passport_fields(text):
@@ -46,9 +48,9 @@ def extract_passport_fields(text):
         "Family Name": "",
         "Nationality": "",
         "Date of Birth": "",
+        "Sex": "",
         "Issuing Date": "",
         "Expiry Date": "",
-        "Sex": "",
         "Country of Birth": "",
         "Issuing State": ""
     }
@@ -67,24 +69,17 @@ def extract_passport_fields(text):
         fields["Nationality"] = nationality.group()
 
     # Dates
-    all_dates = re.findall(r"\d{2}[\s/-]?[A-Z]{3}(?:[\s/-]?[A-Z]{3})?[\s/-]?\d{4}", joined_text.upper())
-    parsed_dates = []
-    for d in all_dates:
-        d_clean = re.sub(r"[/-]", " ", d.upper())
-        d_clean = re.sub(r"\s+", " ", d_clean.strip())
-        try:
-            parsed = datetime.strptime(d_clean, "%d %b %Y")
-            parsed_dates.append(parsed)
-        except:
-            continue
+    all_dates_raw = re.findall(r"\d{2}[\s/-]?[A-Z]{3}(?:[\s/-]?[A-Z]{3})?[\s/-]?\d{4}", joined_text)
+    formatted_dates = [format_date_to_dmy(d) for d in all_dates_raw if format_date_to_dmy(d)]
 
-    parsed_dates.sort()
-    if parsed_dates:
-        fields["Date of Birth"] = parsed_dates[0].strftime("%d-%b-%y")
-    if len(parsed_dates) >= 2:
-        fields["Issuing Date"] = parsed_dates[1].strftime("%d-%b-%y")
-    if len(parsed_dates) >= 3:
-        fields["Expiry Date"] = parsed_dates[-1].strftime("%d-%b-%y")
+    if formatted_dates:
+        fields["Date of Birth"] = formatted_dates[0]
+    if len(formatted_dates) > 1:
+        fields["Issuing Date"] = formatted_dates[1]
+    if len(formatted_dates) > 2:
+        fields["Expiry Date"] = formatted_dates[2]
+    elif len(formatted_dates) == 2:
+        fields["Expiry Date"] = formatted_dates[1]
 
     # Sex
     if re.search(r"\bmale\b", joined_text, re.IGNORECASE):
@@ -96,10 +91,9 @@ def extract_passport_fields(text):
     elif re.search(r"\bSEX[:\s]*F\b", joined_text):
         fields["Sex"] = "Female"
 
-    # Default Issuing State = Country of Birth = Nationality
-    fallback_country = fields["Nationality"] or "—"
-    fields["Issuing State"] = fallback_country
-    fields["Country of Birth"] = fallback_country
+    # Country of Birth & Issuing State fallback
+    fields["Issuing State"] = fields["Nationality"] or "—"
+    fields["Country of Birth"] = fields["Nationality"] or "—"
 
     # Name Detection
     excluded_keywords = [
