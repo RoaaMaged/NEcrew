@@ -10,6 +10,8 @@ import cv2
 import numpy as np
 from passport_mrz_extractor import read_mrz
 import easyocr
+from passporteye import read_mrz
+
 
 st.set_page_config(page_title="Passport OCR", layout="centered")
 st.title("🛂 Universal Passport OCR with MRZ & Fallback")
