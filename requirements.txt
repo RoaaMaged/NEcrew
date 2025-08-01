@@ -1,7 +1,7 @@
 streamlit
-Pillow
+pillow
 pandas
-gspread
-oauth2client
 requests
-openpyxl
+opencv-python
+easyocr
+pytesseract
