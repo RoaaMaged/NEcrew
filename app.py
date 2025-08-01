@@ -97,6 +97,8 @@ if uploaded_files:
         image = Image.open(img)
         st.image(image, caption=img.name, use_container_width=True)  # ✅ fixed here
         with st.spinner("Extracting data..."):
+            st.text_area("📝 Raw OCR Output", text, height=150)
+
             text = extract_text_from_image(image)
             fields = extract_passport_fields(text)
 
