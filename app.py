@@ -1,21 +1,21 @@
 import streamlit as st
 from PIL import Image
 import pandas as pd
-import io
 import base64
+import io
 import requests
 import re
 
+# --- CONFIG ---
 st.set_page_config(page_title="Passport OCR", layout="centered")
-st.title("🛂 Passport / APIS OCR Scanner")
+st.title("🛂 Passport OCR Scanner")
 
-# --- OCR function using OCR.Space API ---
+# --- OCR Function ---
 def extract_text_from_image(image_file):
     api_key = st.secrets["OCR_SPACE_API_KEY"]
     buffered = io.BytesIO()
     image_file.save(buffered, format="JPEG")
     img_str = base64.b64encode(buffered.getvalue()).decode()
-
     response = requests.post(
         "https://api.ocr.space/parse/image",
         data={
@@ -29,92 +29,79 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# --- Field extractor ---
+# --- Field Extraction ---
 def extract_passport_fields(text):
     fields = {
         "Document Type": "P",
-        "Nationality": "",
-        "Document Number": "",
-        "Document Expiry Date": "",
-        "Issuing State": "",
-        "Family Name": "",
+        "Passport Number": "",
         "Given Names": "",
+        "Family Name": "",
+        "Nationality": "",
         "Date of Birth": "",
         "Sex": "",
-        "Country of Birth": ""
+        "Expiry Date": ""
     }
 
-    mrz_country_codes = {
-        "egypt": "EGY", "saudi arabia": "SAU", "united states": "USA",
-        "united kingdom": "GBR", "india": "IND", "germany": "DEU",
-        "france": "FRA", "qatar": "QAT", "kuwait": "KWT", "uae": "ARE",
-        "jordan": "JOR", "lebanon": "LBN", "sa": "SAU"
-    }
-
+    # Try to find each field by common patterns
     lines = [line.strip() for line in text.split("\n") if line.strip()]
-    lines_lower = [line.lower() for line in lines]
+    lower_lines = [l.lower() for l in lines]
 
-    for i, line in enumerate(lines_lower):
-        if "apis name" in line and i >= 2:
-            fields["Family Name"] = lines[i - 2].upper()
-            fields["Given Names"] = lines[i - 1].upper()
+    for i, line in enumerate(lower_lines):
+        if "passport" in line and "number" in line:
+            for j in range(i, i+3):
+                match = re.search(r"[A-Z]?\d{7,}", lines[j])
+                if match:
+                    fields["Passport Number"] = match.group().upper()
+                    break
 
-        if "nationality" in line and i + 1 < len(lines):
-            nat = lines[i + 1].strip().lower()
-            fields["Nationality"] = mrz_country_codes.get(nat, nat[:3].upper())
-            fields["Country of Birth"] = fields["Nationality"]
+        if "name" in line or "given name" in line:
+            if i+1 < len(lines):
+                fields["Given Names"] = lines[i+1].title()
 
-        if "passport" in line and i + 1 < len(lines):
-            state = lines[i + 1].strip().lower()
-            fields["Issuing State"] = mrz_country_codes.get(state, state[:3].upper())
+        if "surname" in line or "family name" in line:
+            if i+1 < len(lines):
+                fields["Family Name"] = lines[i+1].title()
 
-        if "document no" in line or "id number" in line:
-            for j in range(i + 1, i + 3):
-                if j < len(lines):
-                    val = lines[j].strip()
-                    if re.match(r"[A-Z]?\d{7,}", val):
-                        fields["Document Number"] = val.upper()
-                        break
+        if "nationality" in line and i+1 < len(lines):
+            nat = lines[i+1].lower()
+            fields["Nationality"] = nat[:3].upper()
+
+        if "sex" in line or "gender" in line:
+            for j in range(i, i+2):
+                if "male" in lower_lines[j]:
+                    fields["Sex"] = "Male"
+                elif "female" in lower_lines[j]:
+                    fields["Sex"] = "Female"
 
         if "birth" in line:
-            for j in range(i, i + 3):
-                match = re.search(r"\d{2}/\d{2}/\d{4}", lines[j])
-                if match:
-                    fields["Date of Birth"] = match.group()
+            for j in range(i, i+3):
+                dob = re.search(r"\d{2}/\d{2}/\d{4}", lines[j])
+                if dob:
+                    fields["Date of Birth"] = dob.group()
                     break
 
-        if "expire" in line:
-            for j in range(i, i + 3):
-                match = re.search(r"\d{2}/\d{2}/\d{4}", lines[j])
-                if match:
-                    fields["Document Expiry Date"] = match.group()
-                    break
-
-        if "gender" in line or "sex" in line:
-            for j in range(i, i + 3):
-                if "male" in lines[j].lower():
-                    fields["Sex"] = "Male"
-                    break
-                elif "female" in lines[j].lower():
-                    fields["Sex"] = "Female"
+        if "expiry" in line or "expire" in line:
+            for j in range(i, i+3):
+                exp = re.search(r"\d{2}/\d{2}/\d{4}", lines[j])
+                if exp:
+                    fields["Expiry Date"] = exp.group()
                     break
 
     return fields
 
-# --- Upload and Process ---
-uploaded_files = st.file_uploader("Upload Passport/APIS Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+# --- File Upload ---
+uploaded_files = st.file_uploader("Upload Passport Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
-    extracted_data = []
-
     for img in uploaded_files:
         image = Image.open(img)
         st.image(image, caption=img.name, use_column_width=True)
-        with st.spinner(f"Processing {img.name}..."):
+        with st.spinner("Extracting data..."):
             text = extract_text_from_image(image)
             fields = extract_passport_fields(text)
-            extracted_data.append(fields)
 
-    df = pd.DataFrame(extracted_data)
-    st.markdown("### 📋 Extracted Fields")
-    st.dataframe(df, use_container_width=True)
+        # --- Card-like Display ---
+        with st.expander(f"🧾 Extracted Passport Data - {img.name}", expanded=True):
+            for key, value in fields.items():
+                st.markdown(f"**{key}**: {value if value else '—'}")
+
