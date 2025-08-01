@@ -4,5 +4,4 @@ pandas
 requests
 opencv-python
 easyocr
-pytesseract
 passporteye
