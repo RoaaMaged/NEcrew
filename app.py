@@ -6,11 +6,10 @@ import io
 import requests
 import re
 
-# --- Config ---
 st.set_page_config(page_title="Passport OCR", layout="centered")
 st.title("🛂 Universal Passport OCR")
 
-# --- OCR from ocr.space ---
+# OCR using OCR.Space
 def extract_text_from_image(image_file):
     api_key = st.secrets["OCR_SPACE_API_KEY"]
     buffered = io.BytesIO()
@@ -29,7 +28,7 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# --- Smart Passport Field Extraction ---
+# Passport Field Extraction Logic
 def extract_passport_fields(text):
     fields = {
         "Document Type": "P",
@@ -45,75 +44,57 @@ def extract_passport_fields(text):
     }
 
     lines = [line.strip() for line in text.split("\n") if line.strip()]
-    text_lower = [l.lower() for l in lines]
+    joined_text = " ".join(lines)
 
-    for i, line in enumerate(text_lower):
-        original = lines[i]
+    # --- Regex-based Extraction ---
+    passport_no = re.search(r"\b([A-Z]{1,2}\d{6,9})\b", joined_text)
+    if passport_no:
+        fields["Passport Number"] = passport_no.group()
 
-        # Passport number
-        if any(x in line for x in ["passport no", "passport number", "n. passport"]):
-            match = re.search(r"[A-Z]?[0-9]{7,10}", original)
-            if match:
-                fields["Passport Number"] = match.group().upper()
+    dob = re.search(r"\b\d{2}[\s/-]?[A-Z]{3}[\s/-]?\d{4}\b", joined_text)
+    if dob:
+        fields["Date of Birth"] = dob.group().replace(" ", "/").replace("-", "/")
 
-        # Nationality
-        if "nationality" in line:
-            if i+1 < len(lines):
-                nat = lines[i+1].strip()
-                fields["Nationality"] = nat[:3].upper()
+    expiry = re.findall(r"\d{2}[\s/-]?[A-Z]{3}[\s/-]?\d{4}", joined_text)
+    if len(expiry) > 1:
+        fields["Expiry Date"] = expiry[-1].replace(" ", "/").replace("-", "/")
 
-        # Issuing state / country
-        if "repubblica" in line or "state" in line:
-            match = re.search(r"\b[A-Z]{3}\b", original)
-            if match:
-                fields["Issuing State"] = match.group().upper()
+    nationality = re.search(r"\bITA|EGY|USA|IND|FRA|DEU|ESP|CAN|KSA|UAE|QAT\b", joined_text)
+    if nationality:
+        fields["Nationality"] = nationality.group()
 
-        # Names
-        if "surname" in line or "family name" in line:
-            if i+1 < len(lines):
-                fields["Family Name"] = lines[i+1].strip().title()
+    if "male" in joined_text.lower():
+        fields["Sex"] = "Male"
+    elif "female" in joined_text.lower():
+        fields["Sex"] = "Female"
+    elif re.search(r"\bM\b", joined_text):
+        fields["Sex"] = "Male"
+    elif re.search(r"\bF\b", joined_text):
+        fields["Sex"] = "Female"
 
-        if "given name" in line or "name" in line:
-            if i+1 < len(lines):
-                fields["Given Names"] = lines[i+1].strip().title()
+    # Extract names heuristically
+    possible_names = []
+    for line in lines:
+        if line.isupper() and 2 <= len(line.split()) <= 4 and all(len(w) > 2 for w in line.split()):
+            possible_names.append(line.title())
 
-        # Date of Birth
-        if "birth" in line:
-            for j in range(i, i+3):
-                dob = re.search(r"\d{2}[/\s\-]?[A-Za-z]{3}[/\s\-]?\d{4}", lines[j])
-                if dob:
-                    fields["Date of Birth"] = dob.group().replace(" ", "/").replace("-", "/").upper()
-                    break
+    if len(possible_names) >= 2:
+        fields["Family Name"] = possible_names[0]
+        fields["Given Names"] = possible_names[1]
+    elif len(possible_names) == 1:
+        fields["Given Names"] = possible_names[0]
 
-        # Expiry
-        if "expiry" in line or "expire" in line or "expiration" in line:
-            for j in range(i, i+3):
-                exp = re.search(r"\d{2}[/\s\-]?[A-Za-z]{3}[/\s\-]?\d{4}", lines[j])
-                if exp:
-                    fields["Expiry Date"] = exp.group().replace(" ", "/").replace("-", "/").upper()
-                    break
-
-        # Sex
-        if "sex" in line or "gender" in line:
-            for j in range(i, i+2):
-                if "male" in lines[j].lower():
-                    fields["Sex"] = "Male"
-                elif "female" in lines[j].lower():
-                    fields["Sex"] = "Female"
-                elif "m" in lines[j].lower():
-                    fields["Sex"] = "Male"
-                elif "f" in lines[j].lower():
-                    fields["Sex"] = "Female"
-
-        # Country of Birth
-        if "place of birth" in line or "birthplace" in line or "country of birth" in line:
-            if i+1 < len(lines):
-                fields["Country of Birth"] = lines[i+1].strip().title()
+    # Country of birth (heuristic)
+    birth_matches = re.findall(r"\b[A-Z]{3}\b", joined_text)
+    if birth_matches:
+        fields["Country of Birth"] = birth_matches[-1]
+        fields["Issuing State"] = birth_matches[0]
 
     return fields
 
-# --- Upload & Process ---
+# Upload logic
 uploaded_files = st.file_uploader("📸 Upload Passport Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+extracted_data = []
 
 if uploaded_files:
     for img in uploaded_files:
@@ -124,8 +105,21 @@ if uploaded_files:
             text = extract_text_from_image(image)
             st.text_area("📝 Raw OCR Output", text, height=150)
             fields = extract_passport_fields(text)
+            extracted_data.append(fields)
 
-        # Display clean result
         with st.expander(f"🧾 Extracted Passport Data - {img.name}", expanded=True):
             for key, value in fields.items():
                 st.markdown(f"**{key}**: {value if value else '—'}")
+
+# Download as Excel
+if extracted_data:
+    df = pd.DataFrame(extracted_data)
+    towrite = io.BytesIO()
+    df.to_excel(towrite, index=False, sheet_name="Passport Data")
+    towrite.seek(0)
+    st.download_button(
+        label="📥 Download Excel",
+        data=towrite,
+        file_name="passport_data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
