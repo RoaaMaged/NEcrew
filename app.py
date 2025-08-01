@@ -28,6 +28,15 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
+# Clean and normalize date strings
+def normalize_date(raw):
+    if not raw:
+        return ""
+    # Fix things like "12 FEB/ FEB 2001" → "12 FEB 2001"
+    fixed = re.sub(r"/\s*([A-Z]{3})", r" \1", raw.upper())
+    fixed = re.sub(r"\s+", " ", fixed.strip())
+    return fixed.replace("-", "/")
+
 # Passport Field Extraction Logic
 def extract_passport_fields(text):
     fields = {
@@ -46,53 +55,64 @@ def extract_passport_fields(text):
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     joined_text = " ".join(lines)
 
-    # --- Regex-based Extraction ---
+    # Passport Number
     passport_no = re.search(r"\b([A-Z]{1,2}\d{6,9})\b", joined_text)
     if passport_no:
         fields["Passport Number"] = passport_no.group()
 
-    dob = re.search(r"\b\d{2}[\s/-]?[A-Z]{3}[\s/-]?\d{4}\b", joined_text)
-    if dob:
-        fields["Date of Birth"] = dob.group().replace(" ", "/").replace("-", "/")
-
-    expiry = re.findall(r"\d{2}[\s/-]?[A-Z]{3}[\s/-]?\d{4}", joined_text)
-    if len(expiry) > 1:
-        fields["Expiry Date"] = expiry[-1].replace(" ", "/").replace("-", "/")
-
-    nationality = re.search(r"\bITA|EGY|USA|IND|FRA|DEU|ESP|CAN|KSA|UAE|QAT\b", joined_text)
+    # Nationality (ISO codes)
+    nationality = re.search(r"\b(ITA|EGY|USA|IND|FRA|DEU|ESP|CAN|KSA|UAE|QAT)\b", joined_text)
     if nationality:
         fields["Nationality"] = nationality.group()
 
-    if "male" in joined_text.lower():
+    # Dates
+    all_dates = re.findall(r"\d{2}[\s/-]?[A-Z]{3}[\s/-]?[A-Z]{3}?[\s/-]?\d{4}", joined_text)
+    normalized_dates = [normalize_date(d) for d in all_dates]
+    if normalized_dates:
+        fields["Date of Birth"] = normalized_dates[0]
+    if len(normalized_dates) > 1:
+        fields["Expiry Date"] = normalized_dates[-1]
+
+    # Sex
+    if re.search(r"\bmale\b", joined_text, re.IGNORECASE):
         fields["Sex"] = "Male"
-    elif "female" in joined_text.lower():
+    elif re.search(r"\bfemale\b", joined_text, re.IGNORECASE):
         fields["Sex"] = "Female"
     elif re.search(r"\bM\b", joined_text):
         fields["Sex"] = "Male"
     elif re.search(r"\bF\b", joined_text):
         fields["Sex"] = "Female"
 
-    # Extract names heuristically
-    possible_names = []
+    # Country of Birth — use after Date of Birth if present
     for line in lines:
-        if line.isupper() and 2 <= len(line.split()) <= 4 and all(len(w) > 2 for w in line.split()):
-            possible_names.append(line.title())
+        if "maracaibo" in line.lower() or "birth" in line.lower():
+            fields["Country of Birth"] = line.title()
+            break
 
-    if len(possible_names) >= 2:
-        fields["Family Name"] = possible_names[0]
-        fields["Given Names"] = possible_names[1]
-    elif len(possible_names) == 1:
-        fields["Given Names"] = possible_names[0]
+    # Issuing State — from known keywords
+    for line in lines:
+        if any(kw in line.lower() for kw in ["repubblica", "authority", "ministry", "state"]):
+            code_match = re.search(r"\b[A-Z]{3}\b", line)
+            if code_match:
+                fields["Issuing State"] = code_match.group()
 
-    # Country of birth (heuristic)
-    birth_matches = re.findall(r"\b[A-Z]{3}\b", joined_text)
-    if birth_matches:
-        fields["Country of Birth"] = birth_matches[-1]
-        fields["Issuing State"] = birth_matches[0]
+    # Family / Given Name detection (heuristic)
+    name_lines = []
+    for line in lines:
+        if line.isupper() and not any(kw in line.lower() for kw in ["passport", "repubblica", "authority", "birth", "expiry", "document"]):
+            words = line.split()
+            if 1 <= len(words) <= 4 and all(len(w) > 2 for w in words):
+                name_lines.append(line.title())
+
+    if len(name_lines) >= 2:
+        fields["Family Name"] = name_lines[0]
+        fields["Given Names"] = name_lines[1]
+    elif len(name_lines) == 1:
+        fields["Given Names"] = name_lines[0]
 
     return fields
 
-# Upload logic
+# File uploader and display
 uploaded_files = st.file_uploader("📸 Upload Passport Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 extracted_data = []
 
@@ -111,7 +131,7 @@ if uploaded_files:
             for key, value in fields.items():
                 st.markdown(f"**{key}**: {value if value else '—'}")
 
-# Download as Excel
+# Excel download
 if extracted_data:
     df = pd.DataFrame(extracted_data)
     towrite = io.BytesIO()
