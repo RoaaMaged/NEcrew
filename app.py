@@ -49,4 +49,5 @@ def extract_fields(text):
         "jordan": "JOR", "lebanon": "LBN", "sa": "SAU"
     }
 
-    lines = [line.strip() fo]()
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+
