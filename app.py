@@ -6,7 +6,7 @@ import io
 import requests
 import re
 
-# --- CONFIG ---
+# --- App Configuration ---
 st.set_page_config(page_title="Passport OCR", layout="centered")
 st.title("🛂 Passport OCR Scanner")
 
@@ -16,6 +16,7 @@ def extract_text_from_image(image_file):
     buffered = io.BytesIO()
     image_file.save(buffered, format="JPEG")
     img_str = base64.b64encode(buffered.getvalue()).decode()
+
     response = requests.post(
         "https://api.ocr.space/parse/image",
         data={
@@ -42,7 +43,6 @@ def extract_passport_fields(text):
         "Expiry Date": ""
     }
 
-    # Try to find each field by common patterns
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     lower_lines = [l.lower() for l in lines]
 
@@ -70,8 +70,10 @@ def extract_passport_fields(text):
             for j in range(i, i+2):
                 if "male" in lower_lines[j]:
                     fields["Sex"] = "Male"
+                    break
                 elif "female" in lower_lines[j]:
                     fields["Sex"] = "Female"
+                    break
 
         if "birth" in line:
             for j in range(i, i+3):
@@ -89,20 +91,19 @@ def extract_passport_fields(text):
 
     return fields
 
-# --- File Upload ---
+# --- Upload and Process Images ---
 uploaded_files = st.file_uploader("Upload Passport Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     for img in uploaded_files:
         image = Image.open(img)
-        st.image(image, caption=img.name, use_container_width=True)  # ✅ fixed here
-        with st.spinner("Extracting data..."):
-            st.text_area("📝 Raw OCR Output", text, height=150)
+        st.image(image, caption=img.name, use_container_width=True)
 
+        with st.spinner("🔍 Extracting text..."):
             text = extract_text_from_image(image)
+            st.text_area("📝 Raw OCR Output", text, height=150)
             fields = extract_passport_fields(text)
 
-        # --- Card-like Display ---
         with st.expander(f"🧾 Extracted Passport Data - {img.name}", expanded=True):
             for key, value in fields.items():
                 st.markdown(f"**{key}**: {value if value else '—'}")
