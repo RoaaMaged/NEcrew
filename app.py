@@ -32,7 +32,6 @@ def extract_text_from_image(image_file):
 def normalize_date(raw):
     if not raw:
         return ""
-    # Fix things like "12 FEB/ FEB 2001" → "12 FEB 2001"
     fixed = re.sub(r"/\s*([A-Z]{3})", r" \1", raw.upper())
     fixed = re.sub(r"\s+", " ", fixed.strip())
     return fixed.replace("-", "/")
@@ -66,8 +65,9 @@ def extract_passport_fields(text):
         fields["Nationality"] = nationality.group()
 
     # Dates
-    all_dates = re.findall(r"\d{2}[\s/-]?[A-Z]{3}[\s/-]?[A-Z]{3}?[\s/-]?\d{4}", joined_text)
+    all_dates = re.findall(r"\d{2}[\s/-]?[A-Z]{3}(?:[\s/-]?[A-Z]{3})?[\s/-]?\d{4}", joined_text)
     normalized_dates = [normalize_date(d) for d in all_dates]
+
     if normalized_dates:
         fields["Date of Birth"] = normalized_dates[0]
     if len(normalized_dates) > 1:
@@ -83,23 +83,30 @@ def extract_passport_fields(text):
     elif re.search(r"\bF\b", joined_text):
         fields["Sex"] = "Female"
 
-    # Country of Birth — use after Date of Birth if present
+    # Country of Birth
     for line in lines:
         if "maracaibo" in line.lower() or "birth" in line.lower():
             fields["Country of Birth"] = line.title()
             break
 
-    # Issuing State — from known keywords
+    # Issuing State fallback
     for line in lines:
-        if any(kw in line.lower() for kw in ["repubblica", "authority", "ministry", "state"]):
+        if any(kw in line.lower() for kw in ["authority", "repubblica", "ministry", "issued by"]):
             code_match = re.search(r"\b[A-Z]{3}\b", line)
             if code_match:
                 fields["Issuing State"] = code_match.group()
+    if not fields["Issuing State"]:
+        fields["Issuing State"] = fields["Nationality"]
 
-    # Family / Given Name detection (heuristic)
+    # Name Detection
+    excluded_keywords = ["passport", "authority", "repubblica", "document", "birth", "expiry", "number", "code"]
     name_lines = []
     for line in lines:
-        if line.isupper() and not any(kw in line.lower() for kw in ["passport", "repubblica", "authority", "birth", "expiry", "document"]):
+        if (
+            line.isupper()
+            and line.replace(" ", "").isalpha()
+            and not any(kw in line.lower() for kw in excluded_keywords)
+        ):
             words = line.split()
             if 1 <= len(words) <= 4 and all(len(w) > 2 for w in words):
                 name_lines.append(line.title())
