@@ -5,25 +5,12 @@ import base64
 import io
 import requests
 import re
-import numpy as np
-import easyocr
-import cv2
-from passporteye import read_mrz
-from passporteye.util.ocr import ocr
+from datetime import datetime
 
-# ----- Patch passporteye OCR to use EasyOCR -----
-def easyocr_ocr(image, extra_cmdline_params=None):
-    reader = easyocr.Reader(['en'], gpu=False)
-    result = reader.readtext(np.array(image), detail=0)
-    return "\n".join(result)
-
-ocr.__code__ = easyocr_ocr.__code__
-
-# ----- Page Config -----
 st.set_page_config(page_title="Passport OCR", layout="centered")
 st.title("🛂 Universal Passport OCR")
 
-# ----- OCR using OCR.Space -----
+# OCR using OCR.Space
 def extract_text_from_image(image_file):
     api_key = st.secrets["OCR_SPACE_API_KEY"]
     buffered = io.BytesIO()
@@ -42,56 +29,77 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# ----- Normalize Date Format -----
-def normalize_date(raw):
-    if not raw:
+# Normalize to DD-MMM-YY
+def format_date(date_string):
+    try:
+        date_obj = datetime.strptime(date_string.strip(), "%d %b %Y")
+        return date_obj.strftime("%d-%b-%y")
+    except:
         return ""
-    match = re.search(r"(\d{2})[-\s]?([A-Z]{3})[-\s]?(\d{2,4})", raw.upper())
-    if match:
-        day, mon, year = match.groups()
-        if len(year) == 4:
-            year = year[-2:]  # Only last 2 digits
-        return f"{int(day):02d}-{mon.capitalize()}-{year}"
-    return raw
 
-# ----- Extract MRZ -----
-def extract_mrz_data(image_file):
-    mrz = read_mrz(image_file)
-    if mrz:
-        mrz_data = mrz.to_dict()
-        return {
-            "Passport Number": mrz_data.get("number", ""),
-            "Nationality": mrz_data.get("nationality", ""),
-            "Date of Birth": normalize_date(mrz_data.get("date_of_birth", "")),
-            "Sex": mrz_data.get("sex", "").capitalize(),
-            "Expiry Date": normalize_date(mrz_data.get("expiration_date", "")),
-            "Issuing State": mrz_data.get("issuing_country", "")
-        }
-    return {}
-
-# ----- Main Field Extraction -----
-def extract_passport_fields(text, mrz_fields):
+# Extract passport fields
+def extract_passport_fields(text):
     fields = {
         "Document Type": "P",
-        "Passport Number": mrz_fields.get("Passport Number", ""),
+        "Passport Number": "",
         "Given Names": "",
         "Family Name": "",
-        "Nationality": mrz_fields.get("Nationality", ""),
-        "Date of Birth": mrz_fields.get("Date of Birth", ""),
+        "Nationality": "",
+        "Date of Birth": "",
         "Issuing Date": "",
-        "Expiry Date": mrz_fields.get("Expiry Date", ""),
-        "Sex": mrz_fields.get("Sex", ""),
-        "Country of Birth": mrz_fields.get("Issuing State", ""),
-        "Issuing State": mrz_fields.get("Issuing State", "")
+        "Expiry Date": "",
+        "Sex": "",
+        "Country of Birth": "",
+        "Issuing State": ""
     }
 
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     joined_text = " ".join(lines)
 
-    # Issuing Date
-    issue_date_match = re.search(r"Issue(?:d)?\s*[:\-]?\s*(\d{2}[\s/-]?[A-Z]{3}[\s/-]?\d{2,4})", joined_text, re.IGNORECASE)
-    if issue_date_match:
-        fields["Issuing Date"] = normalize_date(issue_date_match.group(1))
+    # Passport Number
+    passport_no = re.search(r"\b([A-Z]{1,2}\d{6,9})\b", joined_text)
+    if passport_no:
+        fields["Passport Number"] = passport_no.group()
+
+    # Nationality
+    nationality = re.search(r"\b(ITA|EGY|USA|IND|FRA|DEU|ESP|CAN|KSA|UAE|QAT)\b", joined_text)
+    if nationality:
+        fields["Nationality"] = nationality.group()
+
+    # Dates
+    all_dates = re.findall(r"\d{2}[\s/-]?[A-Z]{3}(?:[\s/-]?[A-Z]{3})?[\s/-]?\d{4}", joined_text.upper())
+    parsed_dates = []
+    for d in all_dates:
+        d_clean = re.sub(r"[/-]", " ", d.upper())
+        d_clean = re.sub(r"\s+", " ", d_clean.strip())
+        try:
+            parsed = datetime.strptime(d_clean, "%d %b %Y")
+            parsed_dates.append(parsed)
+        except:
+            continue
+
+    parsed_dates.sort()
+    if parsed_dates:
+        fields["Date of Birth"] = parsed_dates[0].strftime("%d-%b-%y")
+    if len(parsed_dates) >= 2:
+        fields["Issuing Date"] = parsed_dates[1].strftime("%d-%b-%y")
+    if len(parsed_dates) >= 3:
+        fields["Expiry Date"] = parsed_dates[-1].strftime("%d-%b-%y")
+
+    # Sex
+    if re.search(r"\bmale\b", joined_text, re.IGNORECASE):
+        fields["Sex"] = "Male"
+    elif re.search(r"\bfemale\b", joined_text, re.IGNORECASE):
+        fields["Sex"] = "Female"
+    elif re.search(r"\bSEX[:\s]*M\b", joined_text):
+        fields["Sex"] = "Male"
+    elif re.search(r"\bSEX[:\s]*F\b", joined_text):
+        fields["Sex"] = "Female"
+
+    # Default Issuing State = Country of Birth = Nationality
+    fallback_country = fields["Nationality"] or "—"
+    fields["Issuing State"] = fallback_country
+    fields["Country of Birth"] = fallback_country
 
     # Name Detection
     excluded_keywords = [
@@ -115,15 +123,9 @@ def extract_passport_fields(text, mrz_fields):
     elif len(name_lines) == 1:
         fields["Given Names"] = name_lines[0]
 
-    # Fallback Country of Birth
-    if not fields["Country of Birth"]:
-        for line in lines:
-            if "birth" in line.lower():
-                fields["Country of Birth"] = fields["Nationality"]
-
     return fields
 
-# ----- UI: Upload Section -----
+# Upload UI
 uploaded_files = st.file_uploader("📸 Upload Passport Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 extracted_data = []
 
@@ -135,16 +137,14 @@ if uploaded_files:
         with st.spinner("🔍 Extracting text..."):
             text = extract_text_from_image(image)
             st.text_area("📝 Raw OCR Output", text, height=150)
-
-            mrz_fields = extract_mrz_data(img)
-            fields = extract_passport_fields(text, mrz_fields)
+            fields = extract_passport_fields(text)
             extracted_data.append(fields)
 
         with st.expander(f"🧾 Extracted Passport Data - {img.name}", expanded=True):
             for key, value in fields.items():
                 st.markdown(f"**{key}**: {value if value else '—'}")
 
-# ----- Download as Excel -----
+# Download Excel
 if extracted_data:
     df = pd.DataFrame(extracted_data)
     towrite = io.BytesIO()
