@@ -5,6 +5,7 @@ import base64
 import io
 import requests
 import re
+from datetime import datetime
 
 st.set_page_config(page_title="Passport OCR", layout="centered")
 st.title("🛂 Universal Passport OCR")
@@ -28,13 +29,23 @@ def extract_text_from_image(image_file):
         return ""
     return result["ParsedResults"][0]["ParsedText"]
 
-# Normalize OCR date formats
+# Normalize and format date to DD-MMM-YY
 def normalize_date(raw):
     if not raw:
         return ""
-    fixed = re.sub(r"/\s*([A-Z]{3})", r" \1", raw.upper())
-    fixed = re.sub(r"\s+", " ", fixed.strip())
-    return fixed.replace("-", "/")
+    raw = raw.replace("-", " ").replace("/", " ").upper()
+    parts = raw.strip().split()
+    try:
+        if len(parts) == 3 and parts[1].isalpha():
+            dt = datetime.strptime(" ".join(parts), "%d %b %Y")
+            return dt.strftime("%d-%b-%y")
+        compact = re.match(r"(\d{2})([A-Z]{3})(\d{4})", raw.replace(" ", ""))
+        if compact:
+            dt = datetime.strptime(compact.group(1) + " " + compact.group(2) + " " + compact.group(3), "%d %b %Y")
+            return dt.strftime("%d-%b-%y")
+    except:
+        return raw
+    return raw
 
 # Extract passport fields
 def extract_passport_fields(text):
@@ -45,8 +56,9 @@ def extract_passport_fields(text):
         "Family Name": "",
         "Nationality": "",
         "Date of Birth": "",
-        "Sex": "",
+        "Issuing Date": "",
         "Expiry Date": "",
+        "Sex": "",
         "Country of Birth": "",
         "Issuing State": ""
     }
@@ -64,12 +76,15 @@ def extract_passport_fields(text):
     if nationality:
         fields["Nationality"] = nationality.group()
 
-    # Dates: use oldest as DOB, newest as Expiry
-    all_dates = re.findall(r"\d{2}[\s/-]?[A-Z]{3}(?:[\s/-]?[A-Z]{3})?[\s/-]?\d{4}", joined_text)
+    # Extract all potential dates
+    all_dates = re.findall(r"\d{2}[\s/-]?[A-Z]{3}[\s/-]?\d{4}", joined_text)
     normalized_dates = [normalize_date(d) for d in all_dates]
+
     if normalized_dates:
         fields["Date of Birth"] = normalized_dates[0]
-    if len(normalized_dates) > 1:
+    if len(normalized_dates) >= 2:
+        fields["Issuing Date"] = normalized_dates[1]
+    if len(normalized_dates) >= 3:
         fields["Expiry Date"] = normalized_dates[-1]
 
     # Sex
@@ -82,13 +97,19 @@ def extract_passport_fields(text):
     elif re.search(r"\bSEX[:\s]*F\b", joined_text):
         fields["Sex"] = "Female"
 
-    # Country of Birth
+    # Country of Birth → match line that contains birth location
     for line in lines:
-        if "maracaibo" in line.lower() or "birth" in line.lower():
-            fields["Country of Birth"] = line.title()
+        if "birth" in line.lower():
+            code = re.search(r"\b[A-Z]{3}\b", line)
+            if code:
+                fields["Country of Birth"] = code.group()
+            else:
+                fields["Country of Birth"] = fields["Nationality"]
             break
+    if not fields["Country of Birth"]:
+        fields["Country of Birth"] = fields["Nationality"]
 
-    # Issuing State
+    # Issuing State → try to extract, otherwise use nationality
     for line in lines:
         if any(kw in line.lower() for kw in ["authority", "repubblica", "ministry", "issued by"]):
             code_match = re.search(r"\b[A-Z]{3}\b", line)
