@@ -1,7 +1,6 @@
 streamlit
-pillow
-pandas
-requests
-opencv-python
+opencv-python-headless
 easyocr
 passporteye
+matplotlib
+python-dateutil
