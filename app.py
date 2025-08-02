@@ -93,4 +93,11 @@ if uploaded_file:
         temp_path = tmp.name
 
     st.image(temp_path, caption="Uploaded Passport", use_column_width=True)
-    st.write("🔍 Extracti
+    st.write("🔍 Extracting MRZ with EasyOCR...")
+
+    data = extract_passport_data_easyocr(temp_path)
+    if data:
+        st.success("✅ Data extracted successfully")
+        st.table(data)
+    else:
+        st.error("❌ Could not find or read MRZ lines.")
