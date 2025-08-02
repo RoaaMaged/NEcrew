@@ -1,6 +1,0 @@
-streamlit
-opencv-python-headless
-easyocr
-passporteye
-matplotlib
-python-dateutil
