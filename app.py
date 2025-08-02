@@ -1,71 +1,76 @@
 import streamlit as st
-import os
-import json
-import cv2
-import matplotlib.image as mpimg
-from passporteye import read_mrz
 import easyocr
-from dateutil import parser
+import cv2
 import string
+import json
+from dateutil import parser
 import tempfile
-import warnings
-warnings.filterwarnings("ignore")
+import os
 
-# Load OCR reader
+# Load EasyOCR reader
 reader = easyocr.Reader(['en'], gpu=False)
 
 # Load country codes
-with open("country_codes.json") as f:
-    country_codes = json.load(f)
+try:
+    with open("country_codes.json") as f:
+        country_codes = json.load(f)
+except FileNotFoundError:
+    st.error("❌ 'country_codes.json' not found.")
+    st.stop()
 
 # Utility functions
-def parse_date(string, iob=True):
-    date = parser.parse(string, yearfirst=True).date() 
-    return date.strftime('%d/%m/%Y')
+def parse_date(s):
+    try:
+        date = parser.parse(s, yearfirst=True).date()
+        return date.strftime('%d/%m/%Y')
+    except Exception:
+        return ""
 
-def clean(text):
-    return ''.join(i for i in text if i.isalnum()).upper()
+def clean(s):
+    return ''.join(c for c in s if c.isalnum()).upper()
 
 def get_country_name(code):
-    for country in country_codes:
-        if country["alpha-3"] == code:
-            return country["name"].upper()
+    for c in country_codes:
+        if c['alpha-3'] == code:
+            return c['name'].upper()
     return code
 
 def get_sex(code):
-    if code in ['M', 'm', 'F', 'f']:
+    if code.upper() in ['M', 'F']:
         return code.upper()
     elif code == '0':
         return 'M'
     return 'F'
 
-def extract_passport_data(image_path):
-    mrz = read_mrz(image_path, save_roi=True)
-    if not mrz:
+# MRZ Extraction logic
+def extract_mrz_from_easyocr(image_path):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    height = gray.shape[0]
+
+    # Crop bottom 20% to find MRZ
+    cropped = gray[int(height * 0.8):, :]
+    results = reader.readtext(cropped, detail=0)
+    mrz_lines = [line.replace(" ", "").upper() for line in results if len(line) >= 30]
+
+    if len(mrz_lines) >= 2:
+        return mrz_lines[-2], mrz_lines[-1]
+    return None, None
+
+def extract_passport_data_easyocr(image_path):
+    a, b = extract_mrz_from_easyocr(image_path)
+    if not a or not b:
         return None
 
-    roi_path = os.path.join(tempfile.gettempdir(), "mrz.png")
-    mpimg.imsave(roi_path, mrz.aux["roi"], cmap="gray")
-
-    img = cv2.imread(roi_path)
-    img = cv2.resize(img, (1110, 140))
-
-    allowlist = string.ascii_letters + string.digits + "< "
-    codes = reader.readtext(img, paragraph=False, detail=0, allowlist=allowlist)
-
-    if len(codes) < 2:
-        return None
-
-    a, b = codes[0].upper(), codes[1].upper()
     a = a + '<' * (44 - len(a)) if len(a) < 44 else a
     b = b + '<' * (44 - len(b)) if len(b) < 44 else b
 
-    surname_names = a[5:44].split("<<", 1)
-    surname, names = surname_names[0], surname_names[1] if len(surname_names) > 1 else ""
+    surname_names = a[5:44].split('<<', 1)
+    surname, names = surname_names if len(surname_names) == 2 else (surname_names[0], "")
 
-    data = {
-        "Name": names.replace("<", " ").strip().upper(),
-        "Surname": surname.replace("<", " ").strip().upper(),
+    return {
+        "Name": names.replace('<', ' ').strip().upper(),
+        "Surname": surname.replace('<', ' ').strip().upper(),
         "Sex": get_sex(clean(b[20])),
         "Date of Birth": parse_date(b[13:19]),
         "Nationality": get_country_name(clean(b[10:13])),
@@ -76,25 +81,16 @@ def extract_passport_data(image_path):
         "Personal Number": clean(b[28:42]),
     }
 
-    return data
-
 # Streamlit UI
-st.set_page_config(page_title="Passport OCR App", layout="centered")
-st.title("🛂 Passport OCR Extractor")
+st.set_page_config(page_title="Passport OCR (No Tesseract)", layout="centered")
+st.title("🛂 Passport OCR App (EasyOCR-only)")
 
-uploaded_file = st.file_uploader("Upload a passport image (JPEG or PNG)", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload a passport image", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp:
-        temp.write(uploaded_file.read())
-        temp_path = temp.name
+if uploaded_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        tmp.write(uploaded_file.read())
+        temp_path = tmp.name
 
-    st.image(temp_path, caption="Uploaded Passport Image", use_column_width=True)
-    st.write("🔍 Extracting data...")
-
-    extracted = extract_passport_data(temp_path)
-    if extracted:
-        st.success("✅ Extraction successful!")
-        st.table(extracted)
-    else:
-        st.error("❌ Could not extract data from the image.")
+    st.image(temp_path, caption="Uploaded Passport", use_column_width=True)
+    st.write("🔍 Extracti
