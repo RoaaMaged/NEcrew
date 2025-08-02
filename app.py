@@ -1,152 +1,100 @@
 import streamlit as st
-from PIL import Image
-import pandas as pd
-import base64
-import io
-import requests
-import re
-from datetime import datetime
+import os
+import json
+import cv2
+import matplotlib.image as mpimg
+from passporteye import read_mrz
+import easyocr
+from dateutil import parser
+import string
+import tempfile
+import warnings
+warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="Passport OCR", layout="centered")
-st.title("🛂 Universal Passport OCR")
+# Load OCR reader
+reader = easyocr.Reader(['en'], gpu=False)
 
-# OCR using OCR.Space
-def extract_text_from_image(image_file):
-    api_key = st.secrets["OCR_SPACE_API_KEY"]
-    buffered = io.BytesIO()
-    image_file.save(buffered, format="JPEG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    response = requests.post(
-        "https://api.ocr.space/parse/image",
-        data={
-            "base64Image": f"data:image/jpeg;base64,{img_str}",
-            "language": "eng",
-            "apikey": api_key
-        },
-    )
-    result = response.json()
-    if result.get("IsErroredOnProcessing"):
-        return ""
-    return result["ParsedResults"][0]["ParsedText"]
+# Load country codes
+with open("country_codes.json") as f:
+    country_codes = json.load(f)
 
-# Normalize and format dates
-def format_date_to_dmy(raw):
-    try:
-        raw = re.sub(r"[^A-Z0-9]", " ", raw.upper()).strip()
-        raw = re.sub(r"\s+", " ", raw)
-        dt = datetime.strptime(raw, "%d %b %Y")
-    except:
-        return ""
-    return dt.strftime("%d-%b-%y")  # e.g., 18-Apr-73
+# Utility functions
+def parse_date(string, iob=True):
+    date = parser.parse(string, yearfirst=True).date() 
+    return date.strftime('%d/%m/%Y')
 
-# Extract passport fields
-def extract_passport_fields(text):
-    fields = {
-        "Document Type": "P",
-        "Passport Number": "",
-        "Given Names": "",
-        "Family Name": "",
-        "Nationality": "",
-        "Date of Birth": "",
-        "Sex": "",
-        "Issuing Date": "",
-        "Expiry Date": "",
-        "Country of Birth": "",
-        "Issuing State": ""
+def clean(text):
+    return ''.join(i for i in text if i.isalnum()).upper()
+
+def get_country_name(code):
+    for country in country_codes:
+        if country["alpha-3"] == code:
+            return country["name"].upper()
+    return code
+
+def get_sex(code):
+    if code in ['M', 'm', 'F', 'f']:
+        return code.upper()
+    elif code == '0':
+        return 'M'
+    return 'F'
+
+def extract_passport_data(image_path):
+    mrz = read_mrz(image_path, save_roi=True)
+    if not mrz:
+        return None
+
+    roi_path = os.path.join(tempfile.gettempdir(), "mrz.png")
+    mpimg.imsave(roi_path, mrz.aux["roi"], cmap="gray")
+
+    img = cv2.imread(roi_path)
+    img = cv2.resize(img, (1110, 140))
+
+    allowlist = string.ascii_letters + string.digits + "< "
+    codes = reader.readtext(img, paragraph=False, detail=0, allowlist=allowlist)
+
+    if len(codes) < 2:
+        return None
+
+    a, b = codes[0].upper(), codes[1].upper()
+    a = a + '<' * (44 - len(a)) if len(a) < 44 else a
+    b = b + '<' * (44 - len(b)) if len(b) < 44 else b
+
+    surname_names = a[5:44].split("<<", 1)
+    surname, names = surname_names[0], surname_names[1] if len(surname_names) > 1 else ""
+
+    data = {
+        "Name": names.replace("<", " ").strip().upper(),
+        "Surname": surname.replace("<", " ").strip().upper(),
+        "Sex": get_sex(clean(b[20])),
+        "Date of Birth": parse_date(b[13:19]),
+        "Nationality": get_country_name(clean(b[10:13])),
+        "Passport Type": clean(a[0:2]),
+        "Passport Number": clean(b[0:9]),
+        "Issuing Country": get_country_name(clean(a[2:5])),
+        "Expiration Date": parse_date(b[21:27]),
+        "Personal Number": clean(b[28:42]),
     }
 
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    joined_text = " ".join(lines)
+    return data
 
-    # Passport Number
-    passport_no = re.search(r"\b([A-Z]{1,2}\d{6,9})\b", joined_text)
-    if passport_no:
-        fields["Passport Number"] = passport_no.group()
+# Streamlit UI
+st.set_page_config(page_title="Passport OCR App", layout="centered")
+st.title("🛂 Passport OCR Extractor")
 
-    # Nationality
-    nationality = re.search(r"\b(ITA|EGY|USA|IND|FRA|DEU|ESP|CAN|KSA|UAE|QAT)\b", joined_text)
-    if nationality:
-        fields["Nationality"] = nationality.group()
+uploaded_file = st.file_uploader("Upload a passport image (JPEG or PNG)", type=["jpg", "jpeg", "png"])
 
-    # Dates
-    all_dates_raw = re.findall(r"\d{2}[\s/-]?[A-Z]{3}(?:[\s/-]?[A-Z]{3})?[\s/-]?\d{4}", joined_text)
-    formatted_dates = [format_date_to_dmy(d) for d in all_dates_raw if format_date_to_dmy(d)]
+if uploaded_file is not None:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp:
+        temp.write(uploaded_file.read())
+        temp_path = temp.name
 
-    if formatted_dates:
-        fields["Date of Birth"] = formatted_dates[0]
-    if len(formatted_dates) > 1:
-        fields["Issuing Date"] = formatted_dates[1]
-    if len(formatted_dates) > 2:
-        fields["Expiry Date"] = formatted_dates[2]
-    elif len(formatted_dates) == 2:
-        fields["Expiry Date"] = formatted_dates[1]
+    st.image(temp_path, caption="Uploaded Passport Image", use_column_width=True)
+    st.write("🔍 Extracting data...")
 
-    # Sex
-    if re.search(r"\bmale\b", joined_text, re.IGNORECASE):
-        fields["Sex"] = "Male"
-    elif re.search(r"\bfemale\b", joined_text, re.IGNORECASE):
-        fields["Sex"] = "Female"
-    elif re.search(r"\bSEX[:\s]*M\b", joined_text):
-        fields["Sex"] = "Male"
-    elif re.search(r"\bSEX[:\s]*F\b", joined_text):
-        fields["Sex"] = "Female"
-
-    # Country of Birth & Issuing State fallback
-    fields["Issuing State"] = fields["Nationality"] or "—"
-    fields["Country of Birth"] = fields["Nationality"] or "—"
-
-    # Name Detection
-    excluded_keywords = [
-        "passport", "passaporto", "authority", "repubblica", "document",
-        "birth", "expiry", "number", "code", "nationality", "sex", "issued"
-    ]
-    name_lines = []
-    for line in lines:
-        if (
-            line.isupper()
-            and line.replace(" ", "").isalpha()
-            and not any(kw in line.lower() for kw in excluded_keywords)
-            and len(line.split()) >= 1
-            and not re.match(r"^[A-Z]{2,4}$", line.strip())
-        ):
-            name_lines.append(line.title())
-
-    if len(name_lines) >= 2:
-        fields["Family Name"] = name_lines[0]
-        fields["Given Names"] = name_lines[1]
-    elif len(name_lines) == 1:
-        fields["Given Names"] = name_lines[0]
-
-    return fields
-
-# Upload UI
-uploaded_files = st.file_uploader("📸 Upload Passport Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-extracted_data = []
-
-if uploaded_files:
-    for img in uploaded_files:
-        image = Image.open(img)
-        st.image(image, caption=img.name, use_container_width=True)
-
-        with st.spinner("🔍 Extracting text..."):
-            text = extract_text_from_image(image)
-            st.text_area("📝 Raw OCR Output", text, height=150)
-            fields = extract_passport_fields(text)
-            extracted_data.append(fields)
-
-        with st.expander(f"🧾 Extracted Passport Data - {img.name}", expanded=True):
-            for key, value in fields.items():
-                st.markdown(f"**{key}**: {value if value else '—'}")
-
-# Download Excel
-if extracted_data:
-    df = pd.DataFrame(extracted_data)
-    towrite = io.BytesIO()
-    df.to_excel(towrite, index=False, sheet_name="Passport Data")
-    towrite.seek(0)
-    st.download_button(
-        label="📥 Download Excel",
-        data=towrite,
-        file_name="passport_data.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    extracted = extract_passport_data(temp_path)
+    if extracted:
+        st.success("✅ Extraction successful!")
+        st.table(extracted)
+    else:
+        st.error("❌ Could not extract data from the image.")
